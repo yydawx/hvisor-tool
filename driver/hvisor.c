@@ -147,12 +147,12 @@ out:
 
 static int hvisor_zone_start(zone_config_t __user *arg) {
     int err = 0;
-    int i = 0;
 
     zone_config_t *zone_config = kmalloc(sizeof(zone_config_t), GFP_KERNEL);
 
     if (zone_config == NULL) {
         pr_err("hvisor.ko: failed to allocate memory for zone_config\n");
+        return -ENOMEM;
     }
 
     if (copy_from_user(zone_config, arg, sizeof(zone_config_t))) {
@@ -416,6 +416,7 @@ static int __init hvisor_init(void) {
     kfree(irq);
 #endif /* X86_64 */
     pr_info("hvisor init done!!!\n");
+    pr_info("我是版本1.4\n");
     return 0;
 err_out:
     pr_err("hvisor cannot register IRQ, err is %d\n", err);

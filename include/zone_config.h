@@ -157,7 +157,7 @@ struct ivc_config {
 };
 typedef struct ivc_config ivc_config_t;
 
-#define CONFIG_MAGIC_VERSION 0x05
+#define CONFIG_MAGIC_VERSION 0x06
 
 // Every time you change the struct, you should also change the
 // `CONFIG_MAGIC_VERSION`
@@ -177,6 +177,10 @@ struct zone_config {
     __u64 dtb_load_paddr;
     __u64 dtb_size;
     char name[CONFIG_NAME_MAXLEN];
+
+    // Multiboot support (NEW)
+    __u64 multiboot_info_paddr;
+    __u32 multiboot_enabled;
 
     arch_zone_config_t arch_config;
     __u64 num_pci_bus;
