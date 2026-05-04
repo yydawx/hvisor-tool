@@ -380,6 +380,11 @@ bool desc_is_writable(volatile VirtqDesc *desc_table, uint16_t idx) {
 
 void *get_virt_addr(void *zonex_ipa, int zone_id) {
     int ram_idx = get_zone_ram_index(zonex_ipa, zone_id);
+    if (ram_idx < 0) {
+        log_error("get_virt_addr: GPA %p not found in any zone%d RAM region",
+                  zonex_ipa, zone_id);
+        return NULL;
+    }
     return zone_mem[zone_id][ram_idx][VIRT_ADDR] -
            zone_mem[zone_id][ram_idx][ZONEX_IPA] + zonex_ipa;
 }
@@ -408,24 +413,40 @@ void virtqueue_set_desc_table(VirtQueue *vq) {
     int zone_id = vq->dev->zone_id;
     log_debug("zone %d set dev %s desc table ipa at %#x", zone_id,
               virtio_device_type_to_string(vq->dev->type), vq->desc_table_addr);
-    vq->desc_table = (VirtqDesc *)get_virt_addr(
+    void *addr = get_virt_addr(
         (void *)(uintptr_t)vq->desc_table_addr, zone_id);
+    if (addr == NULL) {
+        log_error("virtqueue_set_desc_table: failed to translate GPA %#lx",
+                  vq->desc_table_addr);
+        return;
+    }
+    vq->desc_table = (VirtqDesc *)addr;
 }
 
 void virtqueue_set_avail(VirtQueue *vq) {
     int zone_id = vq->dev->zone_id;
     log_debug("zone %d set dev %s avail ring ipa at %#x", zone_id,
               virtio_device_type_to_string(vq->dev->type), vq->avail_addr);
-    vq->avail_ring =
-        (VirtqAvail *)get_virt_addr((void *)(uintptr_t)vq->avail_addr, zone_id);
+    void *addr = get_virt_addr((void *)(uintptr_t)vq->avail_addr, zone_id);
+    if (addr == NULL) {
+        log_error("virtqueue_set_avail: failed to translate GPA %#lx",
+                  vq->avail_addr);
+        return;
+    }
+    vq->avail_ring = (VirtqAvail *)addr;
 }
 
 void virtqueue_set_used(VirtQueue *vq) {
     int zone_id = vq->dev->zone_id;
     log_debug("zone %d set dev %s used ring ipa at %#x", zone_id,
               virtio_device_type_to_string(vq->dev->type), vq->used_addr);
-    vq->used_ring =
-        (VirtqUsed *)get_virt_addr((void *)(uintptr_t)vq->used_addr, zone_id);
+    void *addr = get_virt_addr((void *)(uintptr_t)vq->used_addr, zone_id);
+    if (addr == NULL) {
+        log_error("virtqueue_set_used: failed to translate GPA %#lx",
+                  vq->used_addr);
+        return;
+    }
+    vq->used_ring = (VirtqUsed *)addr;
 }
 
 // record one descriptor to iov.
@@ -622,8 +643,6 @@ static const char *virtio_mmio_reg_name(uint64_t offset) {
 }
 
 uint64_t virtio_mmio_read(VirtIODevice *vdev, uint64_t offset, unsigned size) {
-    log_debug("READ virtio mmio at offset=%#x[%s], size=%d, vdev=%p, type=%d",
-              offset, virtio_mmio_reg_name(offset), size, vdev, vdev->type);
 
     if (!vdev) {
         switch (offset) {
@@ -641,9 +660,16 @@ uint64_t virtio_mmio_read(VirtIODevice *vdev, uint64_t offset, unsigned size) {
         }
     }
 
+    log_debug("READ virtio mmio at offset=%#x[%s], size=%d, vdev=%p, type=%d",
+              offset, virtio_mmio_reg_name(offset), size, vdev, vdev->type);
+
     if (offset >= VIRTIO_MMIO_CONFIG) {
         offset -= VIRTIO_MMIO_CONFIG;
-        // the first member of vdev->dev must be config.
+        if (vdev->dev == NULL) {
+            log_error("virtio-mmio-read: vdev->dev is NULL for config offset %#x",
+                      offset);
+            return 0;
+        }
         log_debug("read virtio dev config");
         return *(uint64_t *)(vdev->dev + offset);
     }
@@ -941,8 +967,9 @@ void virtio_inject_irq(VirtQueue *vq) {
     vq->dev->regs.interrupt_status = VIRTIO_MMIO_INT_VRING;
     vq->dev->regs.interrupt_count++;
     pthread_mutex_unlock(&RES_MUTEX);
-    log_debug("inject irq to device %s, vq is %d",
-              virtio_device_type_to_string(vq->dev->type), vq->vq_idx);
+    log_info("inject irq: dev=%s vq=%d irq_id=%u target_zone=%u",
+             virtio_device_type_to_string(vq->dev->type), vq->vq_idx,
+             res->irq_id, res->target_zone);
     ioctl(ko_fd, HVISOR_FINISH_REQ);
 }
 
@@ -966,10 +993,11 @@ int virtio_handle_req(volatile struct device_req *req) {
     }
 
     if (i == vdevs_num) {
-        log_warn("no matched virtio dev in zone %d, address is 0x%x",
-                 req->src_zone, req->address);
-        value = virtio_mmio_read(NULL, 0, 0);
-        virtio_finish_cfg_req(req->src_cpu, value);
+        // No device at this address — return 0 so the guest sees
+        // an absent device (MagicValue != VIRT_MAGIC).
+        if (!req->need_interrupt) {
+            virtio_finish_cfg_req(req->src_cpu, 0);
+        }
         return -1;
     }
 

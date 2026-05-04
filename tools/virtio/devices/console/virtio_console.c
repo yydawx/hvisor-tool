@@ -96,12 +96,17 @@ int virtio_console_init(VirtIODevice *vdev) {
     master_fd = posix_openpt(O_RDWR | O_NOCTTY);
     if (master_fd < 0) {
         log_error("Failed to open master pty, errno is %d", errno);
+        return -1;
     }
     if (grantpt(master_fd) < 0) {
         log_error("Failed to grant pty, errno is %d", errno);
+        close(master_fd);
+        return -1;
     }
     if (unlockpt(master_fd) < 0) {
         log_error("Failed to unlock pty, errno is %d", errno);
+        close(master_fd);
+        return -1;
     }
     dev->master_fd = master_fd;
 
