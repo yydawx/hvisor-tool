@@ -702,6 +702,9 @@ uint64_t virtio_mmio_read(VirtIODevice *vdev, uint64_t offset, unsigned size) {
         }
     case VIRTIO_MMIO_QUEUE_NUM_MAX:
         log_debug("read VIRTIO_MMIO_QUEUE_NUM_MAX");
+        if (vdev->regs.queue_sel >= vdev->vqs_len) {
+            return 0;
+        }
         return vdev->vqs[vdev->regs.queue_sel].queue_num_max;
     case VIRTIO_MMIO_QUEUE_READY:
         log_debug("read VIRTIO_MMIO_QUEUE_READY");
@@ -813,10 +816,7 @@ void virtio_mmio_write(VirtIODevice *vdev, uint64_t offset, uint64_t value,
         log_debug("zone %d driver set device %s, selecting queue %d",
                   vdev->zone_id, virtio_device_type_to_string(vdev->type),
                   value);
-
-        if (value < vdev->vqs_len) {
-            regs->queue_sel = value;
-        }
+        regs->queue_sel = value;
         break;
     case VIRTIO_MMIO_QUEUE_NUM:
         log_debug("zone %d driver set device %s, use virtqueue num %d",
