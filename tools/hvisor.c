@@ -1265,15 +1265,15 @@ static int zone_start_from_json(const char *json_config_path,
     // ============================================================
     cJSON *multiboot_json = cJSON_GetObjectItem(root, "multiboot_enabled");
     if (multiboot_json != NULL && cJSON_IsBool(multiboot_json)) {
-        config->multiboot_enabled = cJSON_IsTrue(multiboot_json) ? 1 : 0;
+        config->arch_config.multiboot_enabled = cJSON_IsTrue(multiboot_json) ? 1 : 0;
     } else {
-        config->multiboot_enabled = 0;  // Default: disabled
+        config->arch_config.multiboot_enabled = 0;  // Default: disabled
     }
 
     // Calculate GPA-to-HPA offset from first memory region
     // This is used to translate ELF p_paddr (GPA) to actual load address (HPA)
     int64_t gpa_to_hpa_offset = 0;
-    if (config->multiboot_enabled && num_memory_regions > 0) {
+    if (config->arch_config.multiboot_enabled && num_memory_regions > 0) {
         // Use first RAM region for offset calculation
         for (int i = 0; i < num_memory_regions; i++) {
             memory_region_t *mem_region = &config->memory_regions[i];
@@ -1289,7 +1289,7 @@ static int zone_start_from_json(const char *json_config_path,
     }
 
     // Load kernel image to memory
-    if (config->multiboot_enabled) {
+    if (config->arch_config.multiboot_enabled) {
         // For Multiboot/ELF kernels, properly load each ELF segment
         fprintf(stderr, "[MULTIBOOT] Loading ELF segments for Multiboot kernel\n");
         fprintf(stderr, "[MULTIBOOT] Kernel path: %s\n", kernel_filepath_json->valuestring);
@@ -1324,9 +1324,9 @@ static int zone_start_from_json(const char *json_config_path,
     // ============================================================
     fprintf(stderr, "[MULTIBOOT] ====== Starting Multiboot2 support ======\n");
 
-    fprintf(stderr, "[MULTIBOOT] multiboot_enabled = %u\n", config->multiboot_enabled);
+    fprintf(stderr, "[MULTIBOOT] multiboot_enabled = %u\n", config->arch_config.multiboot_enabled);
 
-    if (config->multiboot_enabled) {
+    if (config->arch_config.multiboot_enabled) {
         fprintf(stderr, "[MULTIBOOT] Multiboot mode enabled!\n");
 
         // Get kernel command line
@@ -1347,7 +1347,7 @@ static int zone_start_from_json(const char *json_config_path,
         // Calculate actual HPA for loading
         uint64_t mb_info_hpa = (uint64_t)((int64_t)mb_info_gpa + gpa_to_hpa_offset);
         // Store GPA in config (guest will see this address)
-        config->multiboot_info_paddr = mb_info_gpa;
+        config->arch_config.multiboot_info_paddr = mb_info_gpa;
         fprintf(stderr, "[MULTIBOOT] Multiboot info: GPA=0x%llx, HPA=0x%llx\n", mb_info_gpa, mb_info_hpa);
 
         // Find ELF entry point from kernel ELF
