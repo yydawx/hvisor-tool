@@ -23,9 +23,11 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "boot.h"
 #include "event_monitor.h"
 #include "hvisor.h"
 #include "json_parse.h"
+#include "loader.h"
 #include "log.h"
 #include "safe_cjson.h"
 #include "virtio.h"
@@ -98,8 +100,7 @@ int open_dev() {
     return fd;
 }
 
-static __u64 load_buffer_to_memory(const void *buf, __u64 size,
-                                   __u64 load_paddr) {
+__u64 load_buffer_to_memory(const void *buf, __u64 size, __u64 load_paddr) {
     int fd;
     long page_size;
     __u64 map_size;
@@ -132,7 +133,7 @@ static __u64 load_str_to_memory(const char *str, __u64 load_paddr) {
     return load_buffer_to_memory(str, size, load_paddr);
 }
 
-static __u64 load_image_to_memory(const char *path, __u64 load_paddr) {
+__u64 load_image_to_memory(const char *path, __u64 load_paddr) {
     if (strcmp(path, "null") == 0) {
         return 0;
     }
@@ -402,6 +403,8 @@ static int parse_arch_config(cJSON *root, zone_config_t *config) {
 #endif
 
 #ifdef X86_64
+    int multiboot_enabled = boot_mode_is_multiboot2(root);
+
     cJSON *ioapic_base_json =
         SAFE_CJSON_GET_OBJECT_ITEM(arch_config_json, "ioapic_base");
     cJSON *ioapic_size_json =
@@ -443,13 +446,14 @@ static int parse_arch_config(cJSON *root, zone_config_t *config) {
             0 ||
         parse_json_linux_u64(ioapic_size_json, &arch_config->ioapic_size) !=
             0 ||
-        parse_json_linux_u64(kernel_entry_gpa_json,
-                             &arch_config->kernel_entry_gpa) != 0) {
+        (!multiboot_enabled &&
+         parse_json_linux_u64(kernel_entry_gpa_json,
+                              &arch_config->kernel_entry_gpa)) != 0) {
         log_error("Failed to parse ioapic or kernel_entry_gpa\n");
         return -1;
     }
 
-    if (boot_filepath_json != NULL) {
+    if (boot_filepath_json != NULL && !multiboot_enabled) {
         __u64 boot_load_paddr;
         if (parse_json_linux_u64(boot_load_paddr_json, &boot_load_paddr) != 0) {
             log_error("Failed to parse boot_load_paddr\n");
@@ -681,6 +685,7 @@ err_out:
 static int zone_start_from_json(const char *json_config_path,
                                 zone_config_t *config) {
     cJSON *root = NULL;
+    struct boot_mode boot_mode;
 
     FILE *file = fopen(json_config_path, "r");
     if (file == NULL) {
@@ -876,10 +881,20 @@ static int zone_start_from_json(const char *json_config_path,
                   "dtb_load_paddr\n");
         goto err_out;
     }
+    // BOOT MODE SUPPORT: Check for a zone boot mode first
+    boot_mode_parse(&boot_mode, root);
 
     // Load kernel image to memory
-    config->kernel_size = load_image_to_memory(
-        kernel_filepath_json->valuestring, config->kernel_load_paddr);
+    if (boot_mode.kind != BOOT_MODE_NONE) {
+        if (boot_mode_prepare_zone(&boot_mode, config, root) != 0) {
+            log_error("Failed to prepare zone boot mode\n");
+            goto err_out;
+        }
+    } else {
+        // Default boot path: load the whole kernel image to kernel_load_paddr.
+        config->kernel_size = load_image_to_memory(
+            kernel_filepath_json->valuestring, config->kernel_load_paddr);
+    }
 
 // Load dtb to memory
 // x86_64 uses ACPI
@@ -924,6 +939,13 @@ static int zone_start_from_json(const char *json_config_path,
     if (fd < 0) {
         perror("zone_start: open hvisor failed");
         goto err_out;
+    }
+
+    if (boot_mode.kind != BOOT_MODE_NONE) {
+        if (boot_mode_apply(fd, config->zone_id, &boot_mode) != 0) {
+            close(fd);
+            return -1;
+        }
     }
 
     log_info("Calling ioctl to start zone: [%s]", config->name);
